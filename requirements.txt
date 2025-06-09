@@ -1,0 +1,11 @@
+gradio
+fastapi
+uvicorn
+pandas
+numpy
+torch
+transformers
+Pillow
+ultralytics
+scikit-learn
+scikit-image
