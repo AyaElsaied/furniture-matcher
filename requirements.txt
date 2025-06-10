@@ -1,11 +1,11 @@
-gradio
 fastapi
 uvicorn
-pandas
+pillow
 numpy
+pandas
 torch
-transformers
-Pillow
 ultralytics
-scikit-learn
+transformers
 scikit-image
+scikit-learn
+requests
