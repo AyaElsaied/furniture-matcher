@@ -1,4 +1,5 @@
-import gradio as gr
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
 from PIL import Image
 import shutil
 import os
@@ -9,23 +10,25 @@ from ultralytics import YOLO
 from transformers import CLIPProcessor, CLIPModel
 from sklearn.metrics.pairwise import cosine_similarity
 from skimage.color import rgb2hsv
+import uvicorn
 
-# تحميل النماذج
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-clip_model.eval()
-
-model_yolo = YOLO("yolov8n.pt")
+app = FastAPI()
 
 # إعداد المجلدات
 os.makedirs("uploads", exist_ok=True)
 os.makedirs("product_images", exist_ok=True)
 os.makedirs("crops", exist_ok=True)
 
-# تحميل بيانات المنتجات
-df = pd.read_csv("furniture_products.csv")
+# تحميل النماذج
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+clip_model.eval()
+model_yolo = YOLO("yolov8n.pt")
 
-# تحميل الصور وحفظها
+# تحميل بيانات المنتجات
+df = pd.read_csv("furniture_products (3).csv")
+
+# تحميل صور المنتجات
 def download_image(row):
     try:
         from io import BytesIO
@@ -79,19 +82,21 @@ category_map = {
 def map_category(yolo_cat):
     return category_map.get(yolo_cat.lower(), None)
 
-# استخراج الميزات للمنتجات
+# ميزات المنتجات
 df["feature"] = df["filename"].apply(lambda f: extract_clip_features(f"product_images/{f}"))
 df["color_hist"] = df["filename"].apply(lambda f: extract_full_color_histogram(f"product_images/{f}"))
 
-# الوظيفة الرئيسية
-def match_furniture(image):
+# API Endpoint
+@app.post("/match-furniture")
+async def match_furniture_api(file: UploadFile = File(...)):
     image_path = f"uploads/uploaded.jpg"
-    image.save(image_path)
+    with open(image_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
 
     results = model_yolo(image_path)
     img = np.array(Image.open(image_path).convert("RGB"))
 
-    output = ""
+    matches_per_category = {}
 
     for i, box in enumerate(results[0].boxes.xyxy):
         x1, y1, x2, y2 = map(int, box)
@@ -104,6 +109,9 @@ def match_furniture(image):
         mapped_cat = map_category(category_name)
 
         if not mapped_cat:
+            continue
+
+        if mapped_cat in matches_per_category:
             continue
 
         alpha, beta = category_weights.get(mapped_cat, (0.7, 0.3))
@@ -121,21 +129,6 @@ def match_furniture(image):
 
         products_in_cat["similarity"] = similarities
         best_matches = products_in_cat.sort_values(by="similarity", ascending=False).head(3)
+        matches_per_category[mapped_cat] = best_matches[["Name", "Sale Price", "Image URL"]].to_dict(orient="records")
 
-        output += f"\n### 🪑 أفضل تطابقات لفئة `{mapped_cat}`:\n"
-        for _, row in best_matches.iterrows():
-            output += f"- **{row['Name']}** - 💰 {row['Sale Price']} - 📷 [رابط الصورة]({row['Image URL']})\n"
-
-    return output if output else "❌ لم يتم العثور على تطابقات واضحة."
-
-# إنشاء الواجهة
-interface = gr.Interface(
-    fn=match_furniture,
-    inputs=gr.Image(type="pil"),
-    outputs=gr.Markdown(),
-    title="مطابقة الأثاث باستخدام الذكاء الاصطناعي",
-    description="ارفع صورة لغرفة أو قطعة أثاث، وسنقوم بمطابقة الشكل واللون واقتراح منتجات مشابهة."
-)
-
-if __name__ == "__main__":
-    interface.launch()
+    return JSONResponse(content={"matches": matches_per_category or "No matches found."})
